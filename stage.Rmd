@@ -1,0 +1,872 @@
+---
+title: "Stage"
+author: "VIENNET Salomé"
+date: "4/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list=ls())
+```
+
+# 26 - 04
+
+```{r}
+library(readxl)
+library(glmnet)
+library(reshape2)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+library(genlasso)
+
+# Ancova
+library(ggpubr)   # pour créer facilement des graphiques prêts à la publication
+library(rstatix)  # pour des analyses statistiques faciles
+library(broom)    # pour l’affichage d’un beau résumé des tests statistiques sous forme de data frame
+```
+
+## Mise en place des données
+
+Chargemement de la base de données mmc2.xlsx
+```{r}
+data = read_excel("mmc2.xlsx")
+```
+  
+Récupération des signaux des cellules dendritiques dans une seule matrice
+```{r}
+signaux_cd <- as.matrix(data[,6:42])  # selection des colonnes des signaux des cellules dendritiques et matrice
+signaux_cd
+```
+
+Récupération du signal de lymphocytes TH (IL4) dans un vecteur 
+```{r}
+signal_lth_IL4 <- unlist(data[,45])
+signal_lth_IL4
+class(signal_lth_IL4)
+```
+
+Récupération des informations sur les perturbateurs :
+- Med : rien, aucune perturbation
+- Flu : grippe
+- LPS : Lipopolysaccharides (LPS), également appelés lipoglycanes ou endotoxines, sont de grosses molécules constituées d’un lipide et d’un polysaccharide composé d’un antigène O, d’un noyau externe et d’un noyau interne reliés par une liaison covalente.Le LPS se lie au récepteur TLR4 et promeut la libération de cytokines pro-inflammatoires. C'est une endotoxine pyrogène. Il induit chez l'homme des signes cliniques (fièvre, agrégation des hématies, choc septique, diminution de la pression artérielle).
+- Zymosan : Le zymosane est un complexe de protéines et de glucides extrait de la membrane des cellules de levure. Il est utilisé expérimentalement pour déclencher des réactions inflammatoires
+- Curdlan : Le curdlane (ou β-1,3-glucane) est un polysaccharide (polymère constitué d'oses). Il s'agit d'un polymère linéaire, non ramifié. Il est produit par des bactéries du genre Alcaligenes comme Alcaligenes faecalis var.myxogenes.
+- PGE2 : La prostaglandine E2 (PGE2), appelée dinoprostone en pharmacie, est un acide gras de la classe des prostaglandines, jouant un rôle important dans l'inflammation et un rôle principal dans la fièvre.
+- HKCA :
+- R848 : Resiquimod (R-848) est un médicament qui agit comme modificateur de la réponse immunitaire et a une activité antivirale et antitumorale.
+- PAM3 : Pulse-amplitude modulation (PAM, modulation d'amplitude d'impulsion) est une forme de modulation de signal où les informations du message sont codées dans l'amplitude d'une série d'impulsions de signal. 
+- PolylIC : L'acide polyinosinique-polycytidylique est un ARN double brin synthétique constitué d'un brin de poly(acide inosinique) et d'un brin de poly(acide cytidylique) appariés par wobble pairing. Structurellement semblable à l'ARN bicaténaire de certains virus (groupe III de la classification Baltimore notamment), il interagit avec la protéine TLR3, un récepteur de type Toll présent sur la membrane plasmique des lymphocytes B, des macrophages et des cellules dendritiques, ce qui a pour effet de susciter une réponse immunitaire en simulant une infection virale.
+- HKLM :
+- HKSA :
+- TSLP : La lymphopoïétine stromale thymique (en anglais, Thymic stromal lymphopoietin [TSLP]) est une cytokine. Elle est exprimée par les cellules épithéliales et joue un rôle dans l'inflammation d'origine allergique en stimulant les cellules dendritiques des monocytes et des lymphocytes T auxiliaires. Sa sécrétion est stimulée par une infection, un traumatisme ou une inflammation.
+- GMCSF : Le facteur stimulant les colonies de granulocytes et de macrophages (GM-CSF), également appelé facteur 2 stimulant les colonies (CSF2), est une glycoprotéine monomère sécrétée par les macrophages, les cellules T, les mastocytes, les cellules tueuses naturelles, les cellules endothéliales et les fibroblastes, qui fonctionne telle une cytokine. 
+- IFNb : Les interférons (IFN) sont des protéines (glycoprotéines de la famille des cytokines). Ils sont naturellement produits par les cellules du système immunitaire, mais également par d'autres types cellulaires (cellules dendritiques, mononucléées, épithéliales, etc.) en fonction des sous types.
+Interféron de type I : ce sont tous les types d'interférons qui se lient à un récepteur de surface cellulaire complexe connu sous le nom de l'IFN-α récepteur (IFNAR) qui rassemblent les configurations en chaines IFNAR1 et IFNAR2. Les interférons de type I sont chez l'homme IFN-α, IFN-β et IFN-ω.
+- Alum :
+
+
+## Premiers pas
+  
+### Modèle lasso avec le package glmnet
+
+```{r}
+# Plus le lambda est élevé, plus les coefficients sont réduits à 0
+fit <- glmnet(signaux_cd, signal_lth_IL4, alpha = 1, standardize = TRUE)
+plot(fit, xvar = "lambda")
+legend("bottomright", lwd = 1, col = 1:6, legend = colnames(signaux_cd), cex = .7)
+
+# Coefficients réels à un ou plusieurs lambda dans la plage de la séquence :
+coef(fit)
+```
+
+
+### Cross validation 
+```{r}
+# cv.glmnet est la fonction principale pour effectuer la validation croisée ici, ainsi que diverses méthodes de soutien telles que le traçage et la prédiction.
+lasso_cv <- cv.glmnet(signaux_cd, signal_lth_IL4, alpha = 1, standardize = TRUE, nfolds = 10)
+
+plot(lasso_cv)
+# ligne pointillé rouge -> courbe de validation croisée
+# barres d'erreur -> courbes d'écart-type supérieur et inférieur le long de la séquence lambda
+
+lambda_cv <- lasso_cv$lambda.1se
+# lambda.min -> valeur de lambda qui donne une erreur moyenne minimale validée par croisement
+
+coef(lasso_cv, s = "lambda.1se")
+```
+
+PDL2, CD29, SLAMF3, PVR, CD11a, CD70, CD83, CD86, ICOSL, IL23
+
+
+# 27 - 04
+
+## Séparation des données en deux classes de DC type : MoDC et bDC
+```{r}
+# MoDC
+data_DCtype_MoDC <- data[data$`DC type` == "MoDC",]
+
+# bDC
+data_DCtype_bDC <- data[data$`DC type` == "bDC",]
+```
+  
+  
+## Avec MoDC
+
+### Récupération des signaux des cellules dendritiques dans une seule matrice pour la classe MoDC
+```{r}
+signaux_cd_MoDC <- as.matrix(data_DCtype_MoDC[,6:42])  # selection des colonnes des signaux des cellules dendritiques et matrice
+signaux_cd_MoDC
+```
+
+### Récupération du signal de lymphocytes TH (IL4) dans un vecteur pour la classe MoDC
+```{r}
+signal_lth_IL4_MoDC <- unlist(data_DCtype_MoDC[,45])
+signal_lth_IL4_MoDC
+```
+
+
+### Modèle lasso pour la classe MoDC (Moelle osseuse)
+
+```{r}
+fit_MoDC <- glmnet(signaux_cd_MoDC, signal_lth_IL4_MoDC, alpha = 1, standardize = TRUE)
+plot(fit_MoDC, xvar = "lambda")
+legend("bottomright", lwd = 1, col = 1:6, legend = colnames(signaux_cd_MoDC), cex = .7)
+
+# Coefficients réels à un ou plusieurs lambda dans la plage de la séquence :
+coef(fit_MoDC)
+```
+
+
+
+### Cross validation pour la classe MoDC
+```{r}
+lasso_cv_MoDC <- cv.glmnet(signaux_cd_MoDC, signal_lth_IL4_MoDC, alpha = 1, standardize = TRUE, nfolds = 10)
+
+plot(lasso_cv_MoDC)
+
+lambda_cv_MoDC <- lasso_cv_MoDC$lambda.1se
+
+coef(lasso_cv_MoDC, s = "lambda.1se")
+```
+
+B7H3, PDL2, CD29, SLAMF3, CD11a, CD86, IL23
+
+
+## Avec bDC
+
+### Récupération des signaux des cellules dendritiques dans une seule matrice pour la classe bDC
+```{r}
+signaux_cd_bDC <- as.matrix(data_DCtype_bDC[,6:42])  # selection des colonnes des signaux des cellules dendritiques et matrice
+signaux_cd_bDC
+```
+
+### Récupération du signal de lymphocytes TH (IL4) dans un vecteur pour la classe bDC
+```{r}
+signal_lth_IL4_bDC <- unlist(data_DCtype_bDC[,45])
+signal_lth_IL4_bDC
+```
+
+
+### Modèle lasso pour la classe bDC (Sang)
+
+```{r}
+fit_bDC <- glmnet(signaux_cd_bDC, signal_lth_IL4_bDC, alpha = 1, standardize = TRUE)
+plot(fit_bDC, xvar = "lambda")
+legend("bottomright", lwd = 1, col = 1:6, legend = colnames(signaux_cd_bDC), cex = .7)
+
+# Coefficients réels à un ou plusieurs lambda dans la plage de la séquence :
+coef(fit_bDC)
+```
+
+
+### Cross validation pour la classe bDC
+```{r}
+lasso_cv_bDC <- cv.glmnet(signaux_cd_bDC, signal_lth_IL4_bDC, alpha = 1, standardize = TRUE, nfolds = 10)
+
+plot(lasso_cv_bDC)
+
+lambda_cv_bDC <- lasso_cv_bDC$lambda.1se
+
+coef(lasso_cv_bDC, s = "lambda.1se")
+```
+
+ICOSL
+
+
+### Comparaison 
+
+
+Création base de données avec une colonne pour le type de DC, le nom des colonnes de X, les coefficients liant la colonne X à IL4
+```{r}
+## --- MoDC --- ##
+data_signaux2 <- data[,6:42]
+data_signaux2 <- data_signaux2[1,]
+
+data_signaux2 <- cbind(colnames(data_signaux2))
+data_signaux2 <- as.data.frame(data_signaux2)
+data_signaux2$DCtype <- "MoDC"
+
+# Extraction coef
+coef_MoDC <- coef(lasso_cv_MoDC, s = "lambda.1se")
+coef_MoDC <- coef_MoDC[,1]
+coef_MoDC <- as.data.frame(coef_MoDC)
+coef_MoDC <- coef_MoDC[2:38,]
+# coef_MoDC <- as.data.frame(coef_MoDC)
+
+data_signaux2$Coef <- coef_MoDC
+
+# --- --- # 
+
+## --- bDC --- ##
+data_signaux3 <- data[,6:42]
+data_signaux3 <- data_signaux3[1,]
+
+data_signaux3 <- cbind(colnames(data_signaux3))
+data_signaux3 <- as.data.frame(data_signaux3)
+data_signaux3$DCtype <- "bDC"
+
+# Extraction coef
+coef_bDC <- coef(lasso_cv_bDC, s = "lambda.1se")
+coef_bDC <- coef_bDC[,1]
+coef_bDC <- as.data.frame(coef_bDC)
+coef_bDC <- coef_bDC[2:38,]
+# coef_bDC <- as.data.frame(coef_bDC)
+
+# Ajout coef
+data_signaux3$Coef <- coef_bDC
+
+# --- --- # 
+
+# Création nouveau jeu de données avec les coef pour MoDC et bDC
+data2 <- rbind(data_signaux2, data_signaux3)
+colnames(data2) <- c('Nom_signauxcd', 'DCtype', 'Coefficients')
+
+```
+
+
+```{r}
+graph_coeff <-data2%>%filter(Coefficients!=0) %>% ggplot(aes(x = Nom_signauxcd, y = DCtype)) +
+   geom_tile(aes(fill = Coefficients)) +
+  scale_fill_distiller(palette = "YlGnBu", direction = 1) +
+  theme_light() +
+  labs(x = "Signaux de cellules dendritiques", y = "Types de cellules dendritiques")
+graph_coeff
+```
+
+Fusedlasso
+```{r}
+x <- bdiag(signaux_cd_bDC, signaux_cd_MoDC)
+x
+
+a <- seq(1, ncol(signaux_cd_bDC),1)
+b <- a+ncol(signaux_cd_bDC)
+mat_edge <- rbind(a,b)
+edges = as.numeric(mat_edge)
+
+
+gr = graph(edges=edges,directed=FALSE)
+plot(gr)
+
+# Can either pass the graph object directly, or
+# first construct the penalty matrix, and then
+# pass this
+a1 = fusedlasso(c(signal_lth_IL4_bDC, signal_lth_IL4_MoDC), as.matrix(x),graph=gr)
+a1
+
+
+
+    beta1 <- coef(a1)$beta
+    
+ beta1 %>% as.data.frame() %>% 
+      rowid_to_column() %>%
+      mutate(nom_signal = c(colnames(signaux_cd_bDC) ,colnames(signaux_cd_MoDC))) %>%
+      gather(-rowid, -nom_signal, key = "lambda", value = "coef") %>%
+      ggplot(aes(x = log(as.numeric(lambda)), y = coef, group = as.character(rowid), color = nom_signal)) + geom_line() + theme(legend.position = "none")
+
+# quand lambda grandit les coefficients se regroupent et deviennent égaux
+# chauqe couleur un signal de dc
+```
+
+
+# 29 - 04
+
+### ANCOVA POUR UN SEUL SIGNAL DE CD
+
+L’Analyse de la covariance (ANCOVA) sert à comparer les moyennes d’une variable-réponse entre deux groupes ou plus en tenant compte (ou en corrigeant) la variabilité d’autres variables, appelées covariables. En d’autres termes, l’ANCOVA permet de comparer les moyennes ajustées de deux ou plusieurs groupes indépendants.
+
+
+--- AVEC UN SEUL SIGNAL DE DC --- 
+
+```{r}
+data_ancova_B7H3 <- data[,c(4, 6, 45)]
+```
+
+Covariable : B7H3
+Variable réponse : IL4
+
+
+#### Vérification des hypothèses
+
+Hypothèse de linéarité
+```{r}
+ggscatter(
+  data_ancova_B7H3, x = "B7H3", y = "IL4",
+  color = "DC type", add = "reg.line"
+  )+
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"), color = `DC type`)
+    )
+```
+
+
+Homogénéité des pentes de régression
+```{r}
+data_ancova_B7H3 %>% anova_test(IL4 ~ `DC type`*B7H3)
+```
+
+
+Normalité des résidus
+```{r}
+model_ancova_B7H3 <- lm(IL4 ~ B7H3 + `DC type`, data = data_ancova_B7H3)
+model_ancova_B7H3
+
+model_ancova_B7H3.metrics <- augment(model_ancova_B7H3) %>%
+  select(-.hat, -.sigma, -.fitted)
+
+head(model_ancova_B7H3.metrics,3)
+
+# Evaluation de la normalité des résidus
+shapiro_test(model_ancova_B7H3.metrics$.resid)
+```
+
+
+Homogénéité des variances
+```{r}
+model_ancova_B7H3.metrics %>% levene_test(.resid ~ `DC type`)
+```
+Le test de Levene n’était pas significatif (p > 0,05), nous pouvons donc supposer l’homogénéité des variances résiduelles pour tous les groupes.
+
+
+Valeurs aberrantes
+```{r}
+model_ancova_B7H3.metrics %>% 
+  filter(abs(.std.resid) > 3) %>%
+  as.data.frame()
+```
+
+
+
+Calculs
+```{r}
+res.aov_B7H3 <- data_ancova_B7H3 %>% anova_test(IL4 ~ B7H3 + `DC type`)
+get_anova_table(res.aov_B7H3)
+```
+
+
+Test post-hoc
+```{r}
+library(emmeans)
+# pwc_B7H3 <- data_ancova_B7H3 %>% 
+#  emmeans_test(
+#    IL4 ~ `DC type`, covariate = B7H3,
+#    p.adjust.method = "bonferroni"
+#    )
+# pwc_B7H3
+
+# get(pwc_B7H3)
+```
+
+
+Rapporter
+```{r}
+# Visualisation : Line plots avec p-values
+# pwc_B7H3 <- pwc_B7H3 %>% add_xy_position(x = "DC type", fun = "mean_se")
+# ggline(get_emmeans(pwc), x = "DC type", y = "emmean") +
+#  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) + 
+#  stat_pvalue_manual(pwc, hide.ns = TRUE, tip.length = FALSE) +
+#  labs(
+#    subtitle = get_test_label(res.aov, detailed = TRUE),
+#    caption = get_pwc_label(pwc)
+#  )
+```
+
+
+
+--- AVEC TOUS LES SIGNAUX DE DC --- 
+
+```{r}
+data_ancova <- data[,c(4, 6:42, 45)]
+
+model1 <- model.matrix(data = data_ancova, IL4~B7H3+CD30L+`4-1BBL`+PDL2+VISTA+CD40+CD54+CD58+ICAM2+ICAM3+CD18+CD29+SLAMF5+SLAMF3+PVR+CD11a+CD100+LIGHT+Nectin2+Jagged2+Galectin3+CD70+CD80+CD83+OX40L+ICOSL+HLADR+IL23+IL28a+IL1a+IL10...38+IL12p70+IL1b+IL6...41+TNFa...42*`DC type`-1)
+model1
+
+model2 <- lm(model1~data_ancova$IL4)
+model2
+```
+
+
+
+
+### ANCOVA POUR TOUT
+
+
+#### Vérification des hypothèses
+
+Hypothèse de linéarité
+```{r}
+ggscatter(
+  data_ancova, x = "B7H3", y = "IL4",
+  color = "DC type", add = "reg.line"
+  )+
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"), color = `DC type`)
+    )
+
+ggscatter(
+  data_ancova, x = "CD30L", y = "IL4",
+  color = "DC type", add = "reg.line"
+  )+
+  stat_regline_equation(
+    aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~"), color = `DC type`)
+    )
+
+```
+
+
+Homogénéité des pentes de régression
+```{r}
+lm(data = data_ancova, as.formula(paste("IL4~", paste("`DC type`  *",colnames(signaux_cd)[-3], collapse  = "+")))) %>% step()
+```
+
+Normalité des résidus
+```{r}
+# Calculer le modèle, la covariable passe en premier
+model3 <- lm(IL4 ~ B7H3+CD30L+`4-1BBL`+PDL2+VISTA+CD40+CD54+CD58+ICAM2+ICAM3+CD18+CD29+SLAMF5+SLAMF3+PVR+CD11a+CD100+LIGHT+Nectin2+Jagged2+Galectin3+CD70+CD80+CD83+OX40L+ICOSL+HLADR+IL23+IL28a+IL1a+IL10...38+IL12p70+IL1b+IL6...41+TNFa...42 + `DC type`, data = data_ancova)
+# Inspecter les paramètres de diagnostic du modèle
+model.metrics3 <- augment(model3) %>%
+  select(-.hat, -.sigma, -.fitted) # Supprimer les détails
+head(model.metrics3, 3)
+
+
+# Évaluer la normalité des résidus à l'aide du test de Shapiro-Wilk
+shapiro_test(model.metrics3$.resid)
+```
+
+Homogénéité des variances
+```{r}
+model.metrics3 %>% levene_test(.resid ~ `DC type`)
+```
+Le test de Levene n’était pas significatif (p > 0,05), nous pouvons donc supposer l’homogénéité des variances résiduelles pour tous les groupes.
+
+
+Valeurs aberrantes
+```{r}
+model.metrics3 %>% 
+  filter(abs(.std.resid) > 3) %>%
+  as.data.frame()
+```
+
+
+---- ANCOVA ----
+```{r}
+res.aov <- data_ancova %>% anova_test(IL4 ~ B7H3+CD30L+`4-1BBL`+PDL2+VISTA+CD40+CD54+CD58+ICAM2+ICAM3+CD18+CD29+SLAMF5+SLAMF3+PVR+CD11a+CD100+LIGHT+Nectin2+Jagged2+Galectin3+CD70+CD80+CD83+OX40L+ICOSL+HLADR+IL23+IL28a+IL1a+IL10...38+IL12p70+IL1b+IL6...41+TNFa...42 + `DC type`)
+get_anova_table(res.aov)
+```
+
+Après ajustement pour tenir compte des signaux de cellules dendritiques, il y avait une différence statistiquement significative de IL4 entre les types de cellules dendritiques, F(1, 391) = 14.234, p < 0,0001.
+
+
+Test post-hoc
+```{r}
+
+library(emmeans)
+# pwc <- data_ancova %>% 
+#  emmeans_test(
+#   IL4 ~ `DC type` , covariate = B7H3+CD30L+`4-1BBL`+PDL2+VISTA+CD40+CD54+CD58+ICAM2+ICAM3+CD18+CD29+SLAMF5+SLAMF3+PVR+CD11a+CD100+LIGHT+# Nectin2+Jagged2+Galectin3+CD70+CD80+CD83+OX40L+ICOSL+HLADR+IL23+IL28a+IL1a+IL10...38+IL12p70+IL1b+IL6...41+TNFa...42,
+#    p.adjust.method = "bonferroni"
+#    )
+# pwc
+```
+
+
+## RÉSIDUS
+
+Pour lasso général
+```{r}
+betas_lasso <- as.vector((as.matrix(coef(lasso_cv))))
+resid_lasso <- signal_lth_IL4 - (cbind(1, signaux_cd) %*% betas_lasso)
+resid_lasso
+```
+
+
+Pour lasso MoDC
+```{r}
+betas_lasso_MoDC <- as.vector(as.matrix(coef(lasso_cv_MoDC)))
+resid_lasso_MoDC <- signal_lth_IL4_MoDC - (cbind(1, signaux_cd_MoDC) %*% betas_lasso_MoDC)
+resid_lasso_MoDC
+```
+
+
+Pour lasso bDC
+```{r}
+betas_lasso_bDC <- as.vector(as.matrix(coef(lasso_cv_bDC)))
+resid_lasso_bDC <- signal_lth_IL4_bDC - (cbind(1, signaux_cd_bDC) %*% betas_lasso_bDC)
+resid_lasso_bDC
+```
+
+
+Pour ancova 
+```{r}
+model.metrics3$.resid
+```
+
+
+
+## Test de Wilcoxon
+
+```{r}
+wilcox.test(IL4 ~ `DC type`, data = data)
+```
+
+
+## Anova du modèle lasso
+```{r}
+anova1 <- cv.glmnet(y = data_ancova$IL4, x = model1)
+anova1
+coef(anova1)
+```
+
+
+
+# Clustering hiérarchique
+
+ACP pour ordonner les individus de IL4
+```{r}
+res.pca <- PCA(data, quanti.sup = 43:44:46:47:48:49:50:51:52:53:54:55:56:57:58:59:60, quali.sup = 1:2:3:4:5)
+```
+
+
+Pour ordonner les individus de IL4
+```{r}
+data3 <- data[order(data$IL4),]
+```
+
+
+Clustering hiérarchique pour B7H3
+```{r}
+res.hcpc <- HCPC(data[,6:42], nb.clust = -1)
+```
+
+
+```{r}
+res.pca <- PCA(data[,6:42])
+hc <- HCPC (res.pca, nb.clust = -1)
+```
+
+
+Pour visualiser le dendrogramme généré par la classification
+```{r}
+fviz_dend(hc, 
+           cex = 0.7,                     # Taille du texte
+           palette = "jco",               # Palette de couleur 
+           rect = TRUE, rect_fill = TRUE, # Rectangle autour des groupes
+           rect_border = "jco",           # Couleur du rectangle
+           labels_track_height = 0.8      # Augment l'espace pour le texte
+          )
+```
+
+
+## Influencer les coefficients de la matrice pour qu'ils soient égaux
+
+Création de la matrice X avec les valeurs de B7H3 en diagonale et 0 sinon
+```{r}
+X = matrix(nrow = 428, ncol = 428)
+diag(X) <- data$B7H3
+X[is.na(X)] <- 0
+X
+```
+
+
+Création de la matrice D qui va influencer les coefficients à être égaux
+
+Boucle for
+```{r}
+D = matrix(nrow = 428, ncol = 428)
+
+for(i in 2:nrow(D)-1){
+    D[i+1,i] <- 1
+}
+D[is.na(D)] <- 0
+```
+
+
+Genlasso
+```{r}
+genlasso(data$IL4, X, D)
+```
+
+```{r}
+X_bdc = matrix(nrow = 118, ncol = 118)
+diag(X_bdc) <- data_DCtype_bDC$B7H3
+X_bdc[is.na(X_bdc)] <- 0
+X_bdc
+
+D_bdc = matrix(nrow = 118, ncol = 118)
+
+for(i in 2:nrow(D_bdc)-1){
+    D_bdc[i+1,i] <- 1
+}
+D_bdc[is.na(D_bdc)] <- 0
+
+genlasso(data_DCtype_bDC$IL4, X_bdc, D_bdc)
+```
+
+
+```{r}
+X_MoDC = matrix(nrow = 310, ncol = 310)
+diag(X_MoDC) <- data_DCtype_MoDC$B7H3
+X_MoDC[is.na(X_MoDC)] <- 0
+X_MoDC
+
+D_MoDC = matrix(nrow = 310, ncol = 310)
+
+for(i in 2:nrow(D_MoDC)-1){
+    D_MoDC[i+1,i] <- 1
+}
+D_MoDC[is.na(D_MoDC)] <- 0
+
+genlasso1 <- fusedlasso(data_DCtype_MoDC$IL4, X_MoDC, D_MoDC)
+coef(genlasso1)
+```
+
+
+```{r}
+a <- seq(1,427,1)
+b <- seq(2,428,1)
+mat_edge <- rbind(a,b)
+edges = as.numeric(mat_edge)
+gr = graph(edges=edges,directed=FALSE)
+
+data4 <- data[order(data$B7H3),]
+
+x <- as.matrix(Diagonal(data4$B7H3, n = length(data4$B7H3)))
+  
+# Données avec B7H3 ordonné
+lm(data = data4, IL4~B7H3)
+mod_fused <- fusedlasso(data4$IL4, x, graph = gr)
+mod_fused
+
+data4$ILscale <- scale(data4$IL4)
+data4$B7scale <- scale(data4$B7H3)
+
+
+beta1 <- coef(mod_fused)$beta
+
+beta1 %>% as.data.frame() %>% 
+  rowid_to_column() %>%
+  gather(-rowid, key = "lambda", value = "coef") %>%
+  ggplot(aes(x = log(as.numeric(lambda)), y = coef, color = as.character(rowid))) + geom_line() + theme(legend.position = "none")
+
+
+beta1
+
+
+classe <- apply(beta1, 2, function(x){
+  length(unique(x))
+})
+classe
+
+group <- as.character(beta1[,2])
+table(group)
+
+group2 <- as.data.frame(group)
+data5 <- cbind(group2, data4)
+
+data6 <- data5[, c("group", "DC type")]
+
+data6_bDC = data6 %>% filter(data6$`DC type` == "bDC")
+data6_MoDC = data6 %>% filter(data6$`DC type` == "MoDC")
+
+# Renommage des noms de variables group par bDC et MoDC
+names(data6_bDC) <- c("bDC", "DC type")
+names(data6_MoDC) <- c("MoDC", "DC type")
+
+# Pour fusionner data6_bDC et data6_MoDC
+na = matrix(nrow = 192, ncol = 2)
+na <- as.data.frame(na)
+names(na) <- c("bDC", "DC type")
+data6_bDC <- rbind(data6_bDC, na)
+data6 <- cbind(data6_bDC, data6_MoDC)
+
+data6 <- data6[, c("bDC", "MoDC")]
+
+
+# Renommage des valeurs des variables : 265.41940559440 -> group2 et 313.234188512023 -> group1
+data6$bDC[data6$bDC %in% "313.234188512023"]<-"group1"
+data6$MoDC[data6$MoDC %in% "313.234188512023"]<-"group1"
+
+data6$MoDC[data6$MoDC %in% "265.419405594406"]<-"group2"
+
+```
+
+
+ACP
+```{r}
+res.pca_1 <- PCA(data4, quanti.sup = 43:44:46:47:48:49:50:51:52:53:54:55:56:57:58:59:60, quali.sup = 1:2:3:4:5)
+```
+
+Clustering hiérarchique
+```{r}
+res.hcpc_1 <- HCPC(data4[,6:42], nb.clust = -1)
+hc_1 <- HCPC (res.pca_1, nb.clust = -1)
+```
+
+Pour visualiser le dendrogramme généré par la classification
+```{r}
+fviz_dend(hc_1, 
+           cex = 0.7,                     # Taille du texte
+           palette = "jco",               # Palette de couleur 
+           rect = TRUE, rect_fill = TRUE, # Rectangle autour des groupes
+           rect_border = "jco",           # Couleur du rectangle
+           labels_track_height = 0.8      # Augment l'espace pour le texte
+          )
+```
+
+
+```{r}
+data4 <- data[order(data$B7H3),]
+
+data8 <- data4[,44:60]
+
+# Pour centrer IL4 et B7H3
+data4$ILscale <- scale(data4$IL4)
+data4$B7scale <- scale(data4$B7H3)
+
+selectio <- rownames(coef(lasso_cv, s = "lambda.1se"))[as.numeric(coef(lasso_cv, s = "lambda.1se")) != 0][-1]
+
+data_sel <- data4[,c("IL4", selectio)]
+mod_comp <- lm(IL4~. , data = data_sel)
+residuals(mod_comp)
+
+data4 <- data4[order(residuals(mod_comp)),]
+x_scale <- as.matrix(Diagonal(data4$PDL2, n = length(data4$PDL2)))
+
+mod_fused <- fusedlasso(data4$ILscale, x_scale, graph = gr)
+mod_fused
+
+
+beta1 <- coef(mod_fused)$beta
+
+beta1 %>% as.data.frame() %>% 
+  rowid_to_column() %>%
+  gather(-rowid, key = "lambda", value = "coef") %>%
+  ggplot(aes(x = log(as.numeric(lambda)), y = coef, color = as.character(rowid))) + geom_line() + theme(legend.position = "none")
+
+
+beta1
+
+compte_unit <- function(x){
+  length(unique(x))
+}
+
+apply(beta1, 2, compte_unit)
+
+log(as.numeric(colnames(beta1)))
+
+beta1[,6]
+
+group <- as.character(as.numeric(as.factor(beta1[,6])))
+data4$group <- group
+library(ggpubr)
+
+unique(group)
+
+my_comparisons <- list( c("3", "1"), c("1", "2"), c("4", "2"))
+ggviolin(data4, x = "group", y = "PDL2", fill = "group",
+         add = "boxplot", add.params = list(fill = "white"))+
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif")+ # Add significance levels
+  stat_compare_means(label.y = 50)
+
+ p <- ggboxplot(data4, x = "group", y = "PDL2",
+                color = "group",
+                add = "jitter", shape = "group")
+ p
+ 
+p + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) 
+```
+
+
+```{r}
+# Expliquer tout à tour chacune des colonnes de x (group) avec une anova
+
+mod_grp <- function(x){
+  lm(x~group, data = data4)
+}
+
+class(data4)
+data7 <- data4[,c(6:42)]
+data7 <- as.matrix(data7)
+
+apply(data7, 2, mod_grp)
+
+
+# Anova
+mod_anova <- function(x){
+  Anova(lm(x~group))
+}
+
+apply(data7, 2, mod_anova)
+
+
+# p-value
+p_value <- function(x){
+  Anova(lm(x~group))$`Pr(>F)`
+}
+
+pval <- apply(data7, 2, p_value)
+pval
+
+# Comparaison des p-value
+comparaison <- p.adjust(pval)
+comparaison
+```
+
+
+
+
+```{r}
+# Test post-hoc
+posthoc_tukey <- function(x){
+  tukey_hsd(x~group)
+}
+
+apply(data7, 2, posthoc_tukey)
+```
+
+
+```{r}
+# Boites à moustache
+
+boxplot2 <- function(cyto){
+   ggboxplot(data4, x = "group", y = cyto,
+             color = "group",
+             add = "jitter", shape = "group")
+ }
+
+lapply(colnames(data7), boxplot2)
+```
+
+
+```{r}
+# Rshiny
+
+```
+
